@@ -8,4 +8,5 @@ LIB="memlib.h"
 
 scp cos.itu.dk:~/$SUBDIR/$FILE $LOCAL/$FILE
 scp cos.itu.dk:~/$SUBDIR/$LIB $LOCAL/$LIB
+scp cos.itu.dk:~/$SUBDIR.tar $LOCAL/$SUBDIR.tar
 
