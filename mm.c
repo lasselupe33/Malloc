@@ -1,6 +1,6 @@
 /*
  * mm-naive.c - The fastest, least memory-efficient malloc package.
- * 
+ *
  * In this naive approach, a block is allocated by simply incrementing
  * the brk pointer.  A block is pure payload. There are no headers or
  * footers.  Blocks are never coalesced or reused. Realloc is
@@ -36,7 +36,7 @@ team_t team = {
 
 /**
  * Choices:
- * 
+ *
  * Size stored in header = entire length of block (incl. header and footer)
  * block basepointer = points to start of data (not start of footer)
  * size of header and footer = one word
@@ -177,8 +177,8 @@ void place(void* ptr, size_t size) {
     size_t oldSize = GET_SIZE(HDRP(ptr));
 
     // Update old free block footer and new header
-
-
+    PUT(HDRP(ptr + size), PACK(oldSize - size, 0));
+    PUT(FTRP(ptr), PACK(oldSize - size, 0));
     // Update new block to be allocated
     PUT(HDRP(ptr), PACK(size, 1));
     PUT(FTRP(ptr), PACK(size, 1));
@@ -220,7 +220,7 @@ int mm_check(void)
     return 0;
 }
 
-/* 
+/*
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
@@ -249,7 +249,7 @@ int mm_init(void)
     return 0;
 }
 
-/* 
+/*
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
@@ -259,7 +259,7 @@ void *mm_malloc(size_t size)
     if (size == 0) {
         return NULL;
     }
-    
+
     size_t asize;   // Adjusted block size (i.e. aligned)
     size_t extendsize; // Size we need to extend to make room for the requested size
     char *ptr;
@@ -272,18 +272,18 @@ void *mm_malloc(size_t size)
         // Round down to the lowest amount of bytes we need while maintaining alignment + overhead
         asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
     }
-    
+
     // Search the free list for a fit
     if((ptr = find_fit(asize)) == NULL) {
-        
+
         // If none, extend the heap to a fitting size
         extendsize = MAX(asize, CHUNKSIZE);
-        
+
         if((ptr = extend_heap(extendsize/WSIZE)) == NULL) {
             return NULL;
         }
     }
-    
+
     place(ptr, asize);
     return ptr;
 }
@@ -306,20 +306,20 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *tmp;
+    void *newPtr;
+    if (newPtr = mm_malloc(size) == NULL) {
+        return NULL;
+    }
 
-    // void *oldptr = ptr;
-    // void *newptr;
-    // size_t copySize;
+    size_t copySize = GET_SIZE(HDRP(ptr));
 
-    // newptr = mm_malloc(size);
-    // if (newptr == NULL)
-    //     return NULL;
-    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    // if (size < copySize)
-    //     copySize = size;
-    // memcpy(newptr, oldptr, copySize);
-    // mm_free(oldptr);
-    // return newptr;
-    return tmp;
+    // If we're shrinking, make sure we don't copy
+    // more than necessary to avoid errors
+    if (size < copySize)
+        copySize = size;
+
+    memcpy(newPtr, ptr, copySize);
+    mm_free(ptr);
+
+    return newPtr;
 }
