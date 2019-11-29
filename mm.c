@@ -63,7 +63,7 @@ team_t team = {
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
-#define PREV_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-DSIZE)))
+#define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
 
 #define GET_PREV_FOOTER(bp) ((char *)(bp)-DSIZE)
 
@@ -129,10 +129,10 @@ static void *coalesce(void *bp)
 static void *extend_heap(size_t words)
 {
     /** Allocate even number of words to maintain alignment */
-    size_t size = ((words % 2) ? (words + 1) : words) * WSIZE;
+    size_t size = ((words % 2) ? (words + 1) : words) * DSIZE;
     char *bp = mem_sbrk(size);
 
-    if (bp == (void *)-1)
+    if (bp == (char *)-1)
     {
         return NULL;
     }
@@ -148,7 +148,8 @@ static void *extend_heap(size_t words)
  * Helper that traverses the implicit freelist and returns the first block that
  * is free and is larger than or equal to the size requested
  */
-static void *find_fit(size_t size) {
+static void *find_fit(size_t size)
+{
     char *ptr = heap_listp;
 
     while (GET_SIZE(HDRP(ptr)))
@@ -160,7 +161,7 @@ static void *find_fit(size_t size) {
         // and isn't allocated, then return the block to that pointer!
         if (!IS_ALLOC(hp) && blockSize >= size)
         {
-            return *hp;
+            return (void *)ptr;
         }
 
         // Move to next block!
@@ -173,7 +174,8 @@ static void *find_fit(size_t size) {
 /**
  * Places a block at the given pointer with a given size
  */
-void place(void* ptr, size_t size) {
+void place(void *ptr, size_t size)
+{
     size_t oldSize = GET_SIZE(HDRP(ptr));
 
     // Update old free block footer and new header
@@ -194,6 +196,7 @@ int mm_check(void)
     int blocksSize = 0;
     int free = 0;
     int freeSize = 0;
+    int notCoalesced = 0;
 
     char *ptr = heap_listp;
 
@@ -209,13 +212,20 @@ int mm_check(void)
         {
             free++;
             freeSize += size;
+            size_t prev_alloc = IS_ALLOC(GET_PREV_FOOTER(ptr));
+            size_t next_alloc = IS_ALLOC(HDRP(NEXT_BLKP(ptr)));
+
+            if (!prev_alloc || !next_alloc)
+            {
+                notCoalesced++;
+            }
         }
 
         // Move to next block!
         ptr += size;
     }
 
-    printf("%i blocks (size = %i), including proglogue in the heap\n%i blocks are free (size = %i)\n\n", blocks, blocksSize, free, freeSize);
+    printf("Heapsize: %i bytes. Not using %i bytes\n%i blocks (size = %i), including proglogue in the heap\n%i blocks are free (size = %i)\n%i blocks were not coalesced.\n\n", mem_heapsize(), (mem_heapsize() - blocksSize), blocks, blocksSize, free, freeSize, notCoalesced);
 
     return 0;
 }
@@ -240,7 +250,7 @@ int mm_init(void)
     heap_listp += (WSIZE * 2);
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(CHUNKSIZE / WSIZE) == (void *)-1)
+    if (extend_heap(CHUNKSIZE / DSIZE) == (void *)-1)
     {
         return -1;
     }
@@ -256,35 +266,43 @@ int mm_init(void)
 void *mm_malloc(size_t size)
 {
     // Ignore irrelevant requests
-    if (size == 0) {
+    if (size == 0)
+    {
         return NULL;
     }
 
-    size_t asize;   // Adjusted block size (i.e. aligned)
+    size_t asize;      // Adjusted block size (i.e. aligned)
     size_t extendsize; // Size we need to extend to make room for the requested size
     char *ptr;
 
     // Adjust block size to include overhead (header and footer) and alignment
-    if (size <= DSIZE) {
+    if (size <= DSIZE)
+    {
         // the smallest we can assign is 16 bytes (8 for header and fotter and 8 for content + padding)
         asize = 2 * DSIZE;
-    } else {
+    }
+    else
+    {
         // Round down to the lowest amount of bytes we need while maintaining alignment + overhead
         asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
     }
 
     // Search the free list for a fit
-    if((ptr = find_fit(asize)) == NULL) {
-
+    ptr = find_fit(asize);
+    if (ptr == NULL)
+    {
         // If none, extend the heap to a fitting size
         extendsize = MAX(asize, CHUNKSIZE);
 
-        if((ptr = extend_heap(extendsize/WSIZE)) == NULL) {
+        if ((ptr = extend_heap(extendsize / DSIZE)) == NULL)
+        {
             return NULL;
         }
     }
 
     place(ptr, asize);
+    printf("alloc %i %i %i\n", size, asize, extendsize);
+    mm_check();
     return ptr;
 }
 
@@ -294,11 +312,14 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+    printf("free\n");
+
     size_t size = GET_SIZE(HDRP(ptr));
 
     PUT(HDRP(ptr), PACK(size, 0));
     PUT(FTRP(ptr), PACK(size, 0));
     coalesce(ptr);
+    mm_check();
 }
 
 /*
@@ -307,19 +328,23 @@ void mm_free(void *ptr)
 void *mm_realloc(void *ptr, size_t size)
 {
     void *newPtr;
-    if (newPtr = mm_malloc(size) == NULL) {
+    if ((newPtr = mm_malloc(size)) == NULL)
+    {
         return NULL;
     }
 
-    size_t copySize = GET_SIZE(HDRP(ptr));
+    size_t copySize = GET_SIZE(HDRP(ptr)) - DSIZE;
 
     // If we're shrinking, make sure we don't copy
     // more than necessary to avoid errors
     if (size < copySize)
+    {
         copySize = size;
+    }
 
     memcpy(newPtr, ptr, copySize);
     mm_free(ptr);
-
+    printf("Realloc\n");
+    mm_check();
     return newPtr;
 }

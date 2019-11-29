@@ -7,4 +7,4 @@ FILE="mm.c"
 
 scp $LOCAL/$FILE cos.itu.dk:~/$SUBDIR/$FILE
 
-ssh cos.itu.dk "cd $SUBDIR; make; ./mdriver -f short1-bal.rep"
+ssh cos.itu.dk "cd $SUBDIR; make; ./mdriver; exit"
