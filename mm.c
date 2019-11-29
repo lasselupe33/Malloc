@@ -38,8 +38,22 @@ team_t team = {
  * Choices:
  *
  * Size stored in header = entire length of block (incl. header and footer)
- * block basepointer = points to start of data (not start of footer)
- * size of header and footer = one word
+ * block basepointer = points to start of data (not start of header)
+ * size of header/footer = one word (4 bytes)
+ */
+
+/**
+ * We have implemented a dynamic memory allocator using an implicit free list and
+ * the first_fit algorithm and 8 byte alignment.
+ * 
+ * Block structure:
+ *  Header (4 bytes) (length + allocated bit)
+ *  Payload
+ *  (optional) padding
+ *  Footer (4 bytes) (length + allocated bit)
+ * 
+ * When blocks should be placed (alloc) then the first available spot in the heap
+ * is chosen.
  */
 
 #define WSIZE 4
@@ -62,10 +76,8 @@ team_t team = {
 /** Computes the address to the footer of a block */
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)))
+#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
-
-#define GET_PREV_FOOTER(bp) ((char *)(bp)-DSIZE)
 
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT DISZE
@@ -75,6 +87,7 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+// Will point to the start of the usable heap
 void *heap_listp;
 
 /**
@@ -83,9 +96,9 @@ void *heap_listp;
  */
 static void *coalesce(void *bp)
 {
-    char *next_hdr = HDRP(NEXT_BLKP(bp));
-    size_t prev_alloc = IS_ALLOC(GET_PREV_FOOTER(bp));
-    size_t next_alloc = IS_ALLOC(next_hdr);
+    //char *next_hdr = HDRP(NEXT_BLKP(bp));
+    size_t prev_alloc = IS_ALLOC(FTRP(PREV_BLKP(bp)));
+    size_t next_alloc = IS_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
     /** If prev and next is both allocated then we cannot do anything. */
@@ -97,24 +110,24 @@ static void *coalesce(void *bp)
     /** If prev is allocated and next is free, merge with next block */
     else if (prev_alloc && !next_alloc)
     {
-        size += GET_SIZE(next_hdr);
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
 
     /** Same as above, however with the prev block free and the next block allocated */
     else if (!prev_alloc && next_alloc)
     {
-        size += GET_SIZE(GET_PREV_FOOTER(bp));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(FTRP(bp), PACK(size, 0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
 
     /** If both prev and next are free blocks, then merge all together to on big block */
     else
     {
-        size += GET_SIZE(GET_PREV_FOOTER(bp)) + GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
@@ -129,7 +142,7 @@ static void *coalesce(void *bp)
 static void *extend_heap(size_t words)
 {
     /** Allocate even number of words to maintain alignment */
-    size_t size = ((words % 2) ? (words + 1) : words) * DSIZE;
+    size_t size = ((words % 2) ? (words + 1) : words) * WSIZE;
     char *bp = mem_sbrk(size);
 
     if (bp == (char *)-1)
@@ -150,22 +163,18 @@ static void *extend_heap(size_t words)
  */
 static void *find_fit(size_t size)
 {
-    char *ptr = heap_listp;
+    void *bp;
 
-    while (GET_SIZE(HDRP(ptr)))
+    // As long as there is a next block, continue! (which will conitnue until
+    // we reach the prologue block with a size of 0)
+    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
     {
-        char *hp = HDRP(ptr);
-        int blockSize = GET_SIZE(hp);
-
-        // In case we've found a block that is larger than the requested since
-        // and isn't allocated, then return the block to that pointer!
-        if (!IS_ALLOC(hp) && blockSize >= size)
+        // In case we find a block that isn't allocated and is large enough to
+        // contain our block, then return it!
+        if (!IS_ALLOC(HDRP(bp)) && (size <= GET_SIZE(HDRP(bp))))
         {
-            return (void *)ptr;
+            return bp;
         }
-
-        // Move to next block!
-        ptr += blockSize;
     }
 
     return NULL;
@@ -174,16 +183,31 @@ static void *find_fit(size_t size)
 /**
  * Places a block at the given pointer with a given size
  */
-void place(void *ptr, size_t size)
+void place(void *ptr, size_t asize)
 {
     size_t oldSize = GET_SIZE(HDRP(ptr));
 
-    // Update old free block footer and new header
-    PUT(HDRP(ptr + size), PACK(oldSize - size, 0));
-    PUT(FTRP(ptr), PACK(oldSize - size, 0));
-    // Update new block to be allocated
-    PUT(HDRP(ptr), PACK(size, 1));
-    PUT(FTRP(ptr), PACK(size, 1));
+    if (oldSize - asize >= (2 * DSIZE))
+    {
+        // In case we need to split the free block, then do so now
+        // by first placing our new block (by placing a header and footer with
+        // the desired size)
+        // (by placing the header first, then we ensure the footer is positioned correctly)
+        PUT(HDRP(ptr), PACK(asize, 1));
+        PUT(FTRP(ptr), PACK(asize, 1));
+        ptr = NEXT_BLKP(ptr);
+        // and then updating the remainder of the free block with a new header and
+        // updated footer refleting the new size and that it is free
+        PUT(HDRP(ptr), PACK(oldSize - asize, 0));
+        PUT(FTRP(ptr), PACK(oldSize - asize, 0));
+    }
+    else
+    {
+        // If the allocated size fits the free block perfectly (i.e. less than 16 bytes free), then just
+        // update the current free block to be allocated (the rest of the bytes wouldn't be usable either way)
+        PUT(HDRP(ptr), PACK(oldSize, 1));
+        PUT(FTRP(ptr), PACK(oldSize, 1));
+    }
 }
 
 /**
@@ -212,7 +236,7 @@ int mm_check(void)
         {
             free++;
             freeSize += size;
-            size_t prev_alloc = IS_ALLOC(GET_PREV_FOOTER(ptr));
+            size_t prev_alloc = IS_ALLOC(FTRP(PREV_BLKP(ptr)));
             size_t next_alloc = IS_ALLOC(HDRP(NEXT_BLKP(ptr)));
 
             if (!prev_alloc || !next_alloc)
@@ -250,12 +274,11 @@ int mm_init(void)
     heap_listp += (WSIZE * 2);
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(CHUNKSIZE / DSIZE) == (void *)-1)
+    if (extend_heap(CHUNKSIZE / WSIZE) == (void *)-1)
     {
         return -1;
     }
 
-    mm_check();
     return 0;
 }
 
@@ -278,7 +301,7 @@ void *mm_malloc(size_t size)
     // Adjust block size to include overhead (header and footer) and alignment
     if (size <= DSIZE)
     {
-        // the smallest we can assign is 16 bytes (8 for header and fotter and 8 for content + padding)
+        // the smallest we can assign is 16 bytes (8 for header and footer and 8 for content + padding)
         asize = 2 * DSIZE;
     }
     else
@@ -294,15 +317,13 @@ void *mm_malloc(size_t size)
         // If none, extend the heap to a fitting size
         extendsize = MAX(asize, CHUNKSIZE);
 
-        if ((ptr = extend_heap(extendsize / DSIZE)) == NULL)
+        if ((ptr = extend_heap(extendsize / WSIZE)) == NULL)
         {
             return NULL;
         }
     }
 
     place(ptr, asize);
-    printf("alloc %i %i %i\n", size, asize, extendsize);
-    mm_check();
     return ptr;
 }
 
@@ -312,14 +333,11 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    printf("free\n");
-
     size_t size = GET_SIZE(HDRP(ptr));
 
     PUT(HDRP(ptr), PACK(size, 0));
     PUT(FTRP(ptr), PACK(size, 0));
     coalesce(ptr);
-    mm_check();
 }
 
 /*
@@ -344,7 +362,5 @@ void *mm_realloc(void *ptr, size_t size)
 
     memcpy(newPtr, ptr, copySize);
     mm_free(ptr);
-    printf("Realloc\n");
-    mm_check();
     return newPtr;
 }
