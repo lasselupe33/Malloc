@@ -1,13 +1,23 @@
-/*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
+/**
+ * Choices:
  *
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
+ * Size stored in header = entire length of block (incl. header and footer)
+ * block basepointer = points to start of data (not start of header)
+ * size of header/footer = one word (4 bytes)
+ */
+
+/**
+ * We have implemented a dynamic memory allocator using an implicit free list and
+ * the first_fit algorithm and 8 byte alignment.
+ * 
+ * Block structure:
+ *  Header (4 bytes) (length + allocated bit)
+ *  Payload
+ *  (optional) padding
+ *  Footer (4 bytes) (length + allocated bit)
+ * 
+ * When blocks should be placed (alloc) then the first available spot in the heap
+ * is chosen.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,28 +43,6 @@ team_t team = {
     "Christina Steinhauer",
     /* Second member's email address (leave blank if none) */
     "stei@itu.dk"};
-
-/**
- * Choices:
- *
- * Size stored in header = entire length of block (incl. header and footer)
- * block basepointer = points to start of data (not start of header)
- * size of header/footer = one word (4 bytes)
- */
-
-/**
- * We have implemented a dynamic memory allocator using an implicit free list and
- * the first_fit algorithm and 8 byte alignment.
- * 
- * Block structure:
- *  Header (4 bytes) (length + allocated bit)
- *  Payload
- *  (optional) padding
- *  Footer (4 bytes) (length + allocated bit)
- * 
- * When blocks should be placed (alloc) then the first available spot in the heap
- * is chosen.
- */
 
 #define WSIZE 4
 #define DSIZE 8
